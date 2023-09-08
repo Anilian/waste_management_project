@@ -1,0 +1,233 @@
+import imageio.v2 as imageio
+from matplotlib import pyplot as plt
+from scipy.signal import find_peaks
+import numpy as np
+import pandas as pd
+import copy
+import os.path
+from os import listdir
+import os
+from datetime import datetime as dt, timedelta
+from os.path import isfile, join
+import datetime
+import pathlib
+import time
+
+import torch
+torch.cuda.is_available()
+from torchvision import datasets, transforms, models
+import torch.nn as nn
+import torch.optim as optim
+from torch.optim import lr_scheduler
+import pandas as pd
+from torchvision.io import read_image
+from PIL import Image
+import torchvision.transforms as transforms
+from os import listdir
+import time
+import os
+from datetime import datetime as dt, timedelta
+from os.path import isfile, join
+import datetime
+import pathlib
+
+def fname2int(fname):
+    int_s = int(fname[9:].replace('.bmp', ''))
+    return int_s
+
+
+def list_images(root):
+    filenames = next(os.walk(root), (None, None, []))[2]
+    filenames.sort(key=fname2int)
+    filenames = [os.path.join(root, f) for f in filenames if '.bmp' in f]
+    return filenames
+
+
+def read_bmp_image(pth, error_list):
+        
+    #for retry in range(4):
+    try:
+        img = imageio.imread(pth)
+    except:
+        error_list.append(pth)
+    
+    return img,error_list
+
+
+def get_meta_timestamp(path):
+    cur = pathlib.Path(path)
+    timestamp = cur.stat().st_mtime
+    int_timestamp = int(timestamp)
+    mod_timestamp = str(timestamp - int_timestamp)[2:5]
+   # print('before', mod_timestamp)
+    if len(mod_timestamp)<3:
+        mod_timestamp = mod_timestamp.zfill(3)
+        #print('ather', mod_timestamp)
+    number = str(int_timestamp) + str(mod_timestamp)
+    int_s = int(number)
+    date = dt.fromtimestamp(int_s // 1000), int_s % 1000
+    return timestamp,number, date
+
+def rename_bmp_jpg(mypath):
+
+    onlyfiles = [f for f in listdir(mypath) if isfile(join(mypath, f))]
+    for fname in onlyfiles:
+        timestamp_disk, number_disk, real_date = get_meta_timestamp(os.path.join(mypath,fname))
+        number_camera = int(fname[9:].replace('.bmp', ''))
+        time_camera = dt.fromtimestamp(number_camera // 1000), number_camera % 1000
+
+        result_name =mypath +'/' + str(number_camera) + '_' + str(number_disk) + '.bmp'
+        os.rename(os.path.join(mypath,fname), result_name)
+
+def predict(img, model,transform):
+    img = transform(img).to(device)
+    img = torch.unsqueeze(img, 0)
+    yhat = model(img)
+    index = yhat.data.cpu().numpy().argmax()
+
+    return index 
+
+def get_paths(data_MVS):
+    list_of_prob = os.listdir(data_MVS)
+    path_FX = []
+    path_GC = []
+    for name_folder in list_of_prob:
+        path =os.path.join(data_MVS, name_folder)
+
+        for name in os.listdir(path):
+            if 'GC' in name:
+                path_GC.append(os.path.join(path,name))
+            elif 'FX' in name:
+                path_FX.append(os.path.join(path,name))
+
+    return path_FX,path_GC
+
+if __name__ == "__main__":
+
+	data_MVS = input("all dataset folder to clean with '\\':")
+	data_MVS = data_MVS.replace('\\', '/')
+	path_FX,path_GC = get_paths(data_MVS)
+        
+	#Delete GC files and rename
+
+	#load the model
+	clf = models.resnet18(pretrained = False)
+	num_ftrs = clf.fc.in_features 
+	clf.fc = nn.Linear(num_ftrs, 2) 
+
+	clf = clf.to('cuda')
+	opt = torch.optim.SGD(clf.parameters(),  lr=0.001, momentum=0.9, nesterov=True,)
+	criterion = nn.CrossEntropyLoss()
+
+	#load weight for model
+	device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+	file_path = 'C:/Users/admin/Documents/Python Scripts/weight_model_18_10.pth'
+	clf.load_state_dict(torch.load(file_path))
+	clf.eval()
+	
+    transform = transforms.Compose([
+    transforms.ToTensor(),
+        transforms.Resize(256),
+        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+    ])
+
+    start = time.time()
+
+    final_count = []
+    time_arr_GC = []
+    FX_one_frame_time = 0
+    GC_folder_time = 0
+    error_list_GC =[]
+
+    for path_GC_folder in path_GC:
+        start_folder_time = time.time()
+        count = 0
+        names = os.listdir(path_GC_folder)
+        if 'jpg' in images[0]:
+            continue
+
+        for images in names:
+            start_time = time.time()
+            file_path = os.path.join(path_GC_folder, images)
+            file_path = file_path.replace('\\', '/')
+            try:
+                image = Image.open(file_path)
+            except:
+                error_list_GC.append(file_path)
+            
+            image = image.resize((200,200))
+            
+            label = predict(image,clf, transform)
+            if label == 0:
+                os.remove(file_path)
+                count += 1
+        print('FOLDER GC:', path_GC_folder.split('/')[1])
+        print('Were deleted {} from {}'.format(count, len(names)))
+        rename_bmp_jpg(path_GC_folder)
+        print('all images are renamed')
+        print('Переведены в jpg с качеством 90')
+        print('----')
+        GC_folder_time = time.time() - start_folder_time
+        print('processing time per folder: ', GC_folder_time)
+        GC_one_frame_time = np.mean(time_arr_GC)
+        print('average processing time per file: ', GC_one_frame_time)
+        print('---------------')
+
+    #Delete FX files and rename
+    path_class_0 = 'Z:/CV/light_data/0_class/FX'
+    ref_class_0 = list_images(path_class_0)
+    ref = imageio.imread(ref_class_0[0])
+
+    line_length = 640
+    gt_line = ref[:, 300]
+    threshold = 10
+    error_list_FX = []
+    time_arr = []
+    FX_one_frame_time = 0
+    FX_folder_time = 0
+    for path_FX_folder in path_FX:
+        final_count = []
+        start_folder_time = time.time()
+        images_names = list_images(path_FX_folder)
+
+        for i in images_names:
+            img_i,error_list_i  = read_bmp_image(i,error_list_FX)
+            error_list_FX.extend(error_list_i)
+            if 'Image_' not in i:
+                continue
+            start_time = time.time()
+            line_val = []
+
+            for c in range(line_length):
+                line_class = img_i[:, c]
+                mse1 = ((line_class - gt_line)**2).mean()
+                line_val.append(mse1)
+
+            count_1_class = 0
+            
+            for value in line_val:
+                if value > threshold: #если расстояние больше 10, то линии не относятся к фону
+                    count_1_class = count_1_class + 1
+                    
+            final_count.append(count_1_class)
+
+            if count_1_class == 0:
+                os.remove(os.path.join(path_FX_folder, i))
+        
+            time_arr.append(time.time() - start_time)
+
+        zero_count = len(final_count) - np.count_nonzero(final_count)
+        print('FOLDER:', path_FX_folder.split(data_MVS)[1])
+        print('in the end, {} files out of {} were deleted'.format(zero_count,len(images_names)))
+        rename_bmp_jpg(path_FX_folder)
+        print('all images are renamed')
+        print('----')
+        FX_folder_time = time.time() - start_folder_time
+        print('processing time per folder: ', FX_folder_time)
+        FX_one_frame_time = np.mean(time_arr)
+        #print('average processing time per file: ', FX_one_frame_time)
+        print('---------------')
+
+    stop = time.time()
+    print('##################################')
+    print('Total processing time of the dataset - {} hours, {} mins, {} sec'.format((stop-start)//3600,(stop-start)//60, (stop-start)))
